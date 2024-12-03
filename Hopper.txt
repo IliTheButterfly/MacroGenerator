@@ -1,0 +1,231 @@
+Hopper
+
+Lock
+Pause
+Zero
+Stop
+
+On
+Cmd
+Sel
+Per
+
+HopperLockOn
+HopperLockCmd
+HopperLockSel
+HopperLockPer
+HopperPauseOn
+HopperPauseCmd
+HopperPauseSel
+HopperPausePer
+HopperZeroOn
+HopperZeroCmd
+HopperZeroSel
+HopperZeroPer
+HopperStopOn
+HopperStopCmd
+HopperStopSel
+HopperStopPer
+
+Hopper1PlayOn
+Hopper1PlayCmd
+Hopper1PlaySel
+Hopper1PlayPer
+Hopper2PlayOn
+Hopper2PlayCmd
+Hopper2PlaySel
+Hopper2PlayPer
+Hopper3PlayOn
+Hopper3PlayCmd
+Hopper3PlaySel
+Hopper3PlayPer
+Hopper4PlayOn
+Hopper4PlayCmd
+Hopper4PlaySel
+Hopper4PlayPer
+Hopper5PlayOn
+Hopper5PlayCmd
+Hopper5PlaySel
+Hopper5PlayPer
+
+Hopper1Alarm
+Hopper2Alarm
+Hopper3Alarm
+Hopper4Alarm
+Hopper5Alarm
+
+V80100
+V80121
+V80122
+V80123
+V80124
+V80125
+V80126
+V80112
+V80111
+V80131
+V80132
+V80133
+V80134
+V80135
+V80401
+V80150
+V40141
+V40241
+V43041
+V42142
+V41042
+V41242
+V41143
+V40443
+V40344
+V80141
+V80142
+V80143
+V80144
+
+H41
+H42
+H43
+H44
+
+
+Lock
+Pause
+Stop
+Zero
+
+Per
+Cmd
+Sel
+On
+
+QtyF.Play
+
+C21
+C22
+C23
+C24
+C25
+C26
+F31
+F32
+F33
+F34
+F35
+
+C21C22C23C24C25C26F31F32F33F34F35
+
+W11
+W12
+
+lockPer
+lockOn
+lockCmd
+zeroPer
+zeroCmd
+pausePer
+pauseOn
+pauseCmd
+stopPer
+stopOn
+stopCmd
+
+macro_command main()
+    bool selected
+    bool lockPer, lockOn, lockCmd, zeroPer, zeroCmd, pausePer, pauseOn, pauseCmd, stopPer, stopOn, stopCmd
+    float req, rem, act, total
+
+    
+    GetData(selected, "Local HMI", "", 1)
+    if selected then
+        GetData(lockPer, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(lockOn, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(lockCmd, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(zeroPer, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(zeroCmd, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(pausePer, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(pauseOn, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(pauseCmd, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(stopPer, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(stopOn, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        GetData(stopCmd, "Rockwell EtherNet/IP (CompactLogix)", ".Lock.Per", 1)
+        
+
+
+end macro_command
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+HMI = [
+    "", # 0
+    "", # 1
+    "", # 2
+    "", # 3
+    "", # 4
+    "", # 5
+    "", # 6
+    "", # 7
+    "", # 8
+    "", # 9
+    "", # 10
+    "", # 11
+    "", # 12
+    "EnergizedSim", # 13
+    "EnergizedFeedback", # 14
+    "Lock", # 15
+    "", # 16
+    "", # 17
+    "", # 18
+    "", # 19
+    "", # 20
+    "", # 21
+    "", # 22
+    "", # 23
+    "", # 24
+    "", # 25
+    "", # 26
+    "", # 27
+    "", # 28
+    "", # 29
+    "", # 30
+    "", # 31
+]
