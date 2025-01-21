@@ -5,7 +5,9 @@ import enum
 from functools import cache, cached_property
 import itertools
 from typing import Callable, Dict, Iterable, Literal, Optional, Set, Tuple, TypeVar, Union, List
+import pyperclip
 from pyvis.network import Network
+from api import AND, NOT, OR, EXPRESSION
 
 P = None
 
@@ -406,81 +408,6 @@ HOPPER_CONNECTIONS = {
 }
 
 
-class EXPRESSION:
-    def __init__(self):
-        pass
-    
-    def __and__(self, other:EXPRESSION) -> EXPRESSION:
-        return AND(self, other)
-    
-    def __or__(self, other:EXPRESSION) -> EXPRESSION:
-        return OR(self, other)
-    
-    def __inv__(self) -> EXPRESSION:
-        return NOT(self)
-    
-    def __str__(self) -> str: ...
-    
-class LITERAL(EXPRESSION):
-    def __init__(self, literal:str):
-        self.literal = literal
-        
-    def __str__(self) -> str:
-        return self.literal
-    
-    def __repr__(self):
-        return f"[{self.literal}]"
-    
-class NOT(EXPRESSION):
-    def __init__(self, expression:EXPRESSION):
-        self.expression = expression
-        
-    def __inv__(self) -> EXPRESSION:
-        return self.expression
-        
-    def __str__(self) -> str:
-        return f'(not {self.expression})'
-    
-    def __repr__(self):
-        return f'NOT [{repr(self.expression)}]'
-    
-class OR(EXPRESSION):
-    def __init__(self, *expressions:EXPRESSION):
-        self.expressions:List[EXPRESSION] = list(expressions)
-    
-    def __or__(self, other:EXPRESSION) -> OR:
-        if isinstance(other, OR):
-            return OR(*self.expressions, *other.expressions)
-        return super().__or__(self, other)
-    
-    def append(self, *expressions:EXPRESSION):
-        self.expressions.extend(expressions)
-        
-    def __str__(self):
-        return f'({" or ".join([str(e) for e in self.expressions])})'
-        
-    def __repr__(self):
-        return f'[{" OR ".join([repr(e) for e in self.expressions])}]'
-        
-class AND(EXPRESSION):
-    def __init__(self, *expressions:EXPRESSION):
-        self.expressions:List[EXPRESSION] = list(expressions)
-        
-    def __and__(self, other:EXPRESSION) -> AND:
-        if isinstance(other, AND):
-            return AND(*self.expressions, *other.expressions)
-        return super().__and__(self, other)
-        
-    def append(self, *expressions:EXPRESSION):
-        self.expressions.extend(expressions)
-        
-    def __str__(self):
-        return f'({" and ".join([str(e) for e in self.expressions])})'
-        
-    def __repr__(self):
-        return f'[{" AND ".join([repr(e) for e in self.expressions])}]'
-
-
 _T = TypeVar("_T")
 def group(it:Iterable[_T], length:int) -> List[List[_T]]:
     iterator = iter(it)
@@ -525,6 +452,7 @@ def generate_code(g:Graph):
     script +=  "    unsigned short speedBCD\n"
     script +=  "    BIN2BCD(speed, speedBCD)\n"
     script +=  "    unsigned short setSpeedBCD\n"
+    script +=  "    float floatValue\n"
     script +=  "    \n"
     
     
@@ -553,9 +481,6 @@ def generate_code(g:Graph):
     script += f"    \n"
     script += f"    \n"
     
-    script += f"    // Declare Main Pumps\n"
-    script += f"    bool {', '.join(['MP80101', 'MP80102'])}\n"
-    
     script += f"    \n"
     script += f"    \n"
     
@@ -577,7 +502,7 @@ def generate_code(g:Graph):
         
     script += f"    // Read Valves\n"
     for v in itertools.chain(valve_names, *hopper_valve_names.values()):
-        script += f'    GetData({v}, "{PLC_NAME}", "{v}.HMI.17", 1)\n'
+        script += f'    GetData({v}, "{PLC_NAME}", "{v}.HMI.14", 1)\n'
     script += f"    \n"
     script += f"    \n"
     
@@ -590,6 +515,18 @@ def generate_code(g:Graph):
     script += f"    // Read Hopper Pumps\n"
     for p in itertools.chain(*hopper_pump_names.values()):
         script += f'    GetData({p}, "{PLC_NAME}", "{p}.HMI.14", 1)\n'
+    print(script)
+    script = ""
+    
+    script += f"    \n"
+    script += f"    \n"
+    script += f"    // Read D801\n"
+    script += f'    GetData(floatValue, "{PLC_NAME}", "D801.HLimit", 1)\n'
+    script += f'    SetData(floatValue, "{HMI_NAME}", "D801_H", 1)\n'
+    script += f'    GetData(floatValue, "{PLC_NAME}", "D801.LLimit", 1)\n'
+    script += f'    SetData(floatValue, "{HMI_NAME}", "D801_L", 1)\n'
+    script += f'    floatValue = 10\n'
+    script += f'    SetData(floatValue, "{HMI_NAME}", "D801_AL", 1)\n'
     print(script)
     script = ""
     
@@ -615,7 +552,7 @@ def generate_code(g:Graph):
         if s is None:
             continue
         
-        pump = LITERAL('MP80102') if any([x.name in hoppers for x in s]) else LITERAL('MP80101')
+        pump = OR(LITERAL("MP80101"), LITERAL("MP80102"))
             
         script += f"    v = {AND((pump), OR(*[LITERAL(valve) for valve in nodes2valves(s)]))}\n"
         script += f'    setSpeedBCD = speedBCD * v\n'
@@ -659,14 +596,14 @@ def generate_code(g:Graph):
     script += "\nend macro_command\n\n"
     print(script)
 
+def gen_bit_address(start:int):
+    for major in itertools.count(start):
+        for minor in range(16):
+            yield f"{major}{str(minor).zfill(2)}"
 def generate_vars(g:Graph):
     import pyperclip
     s = ""
     
-    def gen_bit_address(start:int):
-        for major in itertools.count(start):
-            for minor in range(16):
-                yield f"{major}{str(minor).zfill(2)}"
     
     pipes = g.branches
     
@@ -694,7 +631,13 @@ def generate_vars(g:Graph):
         s += f"{p.name}Speed\tLocal HMI\tLW\t{next(word_it)}\tSpeed for {p.name}\t16-bit BCD\t\t\t\t\t\n"
     pyperclip.copy(s)
 
-
+def generate_bit_addresses(start:int, count:int):
+    import pyperclip
+    it = iter(gen_bit_address(start))
+    addresses = list([next(it) for _ in range(count)])
+    s = '\n'.join(addresses)
+    pyperclip.copy(s)
+    
 
 
 if __name__ == "__main__":
@@ -709,4 +652,5 @@ if __name__ == "__main__":
     # print(x)
 
     generate_code(g)
-    generate_vars(g)
+    # generate_vars(g)
+    # generate_bit_addresses(170, 46)
