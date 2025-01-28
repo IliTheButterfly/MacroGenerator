@@ -1,4 +1,6 @@
+import itertools
 from time import sleep
+from typing import Dict
 from api import *
 
 
@@ -69,7 +71,7 @@ def strip_dot(name:str) -> str:
 def generate_load_tank_values():
     m = Macro('LoadTankValues', 'Resets all the values for the tank screen')
     
-    m.prepare()
+    m.begin()
 
     t = Variable('t', 'bool', True)
     f = Variable('f', 'bool', True)
@@ -78,7 +80,9 @@ def generate_load_tank_values():
     m.write(
         COMMENT('Set loading flag'),
         SetData(t, HMI_NAME, LOADING_FLAG_NAME),
-        DELAY(2000),
+        # DELAY(2000),
+        EMPTY(),
+        COMMENT('Reset Command values'),
     )
     
     for command in tank_commands:
@@ -86,38 +90,59 @@ def generate_load_tank_values():
             if value == "Sel" and command not in has_sel:
                 continue
             hmi_tag = f"Tank{strip_dot(command)}{value}"
-            m.write(
-                SetData(f, HMI_NAME, hmi_tag),
-            )
+            # m.write(SetData(f, HMI_NAME, hmi_tag))
+            
     m.write(EMPTY())
     
     # Add float values for each tank
     for hmi_part, plc_suffix in float_values.items():
         hmi_tag = f"Tank{hmi_part}"
-        m.write(
-            SetData(zero, HMI_NAME, hmi_tag),
-        )
+        if hmi_part in write_float_values:
+            continue
+        # m.write(SetData(zero, HMI_NAME, hmi_tag))
     m.write(EMPTY())
 
     m.end()
     m.display()
+    m.clipboard()
 
 def generate_update_tank_values():
     m = Macro('UpdateTankValues', 'Updates the values for the tank screen')
     
-    m.prepare()
+    m.begin()
     plcVal = vbool('plcVal')
     f = vbool('f', False)
     plcFloat = vfloat('plcFloat')
-    plcMax = vfloat('plcMax')
-    plcReqMax = vfloat('plcReqMax')
+    total = vfloat('total')
+    maxReq = vfloat('maxReq')
+    minReq = vfloat('minReq')
+    req = vfloat('req')
     tankSelected = vbool('tankSelected')
+    loading = vbool('loading')
     
     for tank in tanks:
         m.write(
             COMMENT(f'{tank} Tank'),
             GetData(tankSelected, HMI_NAME, tank),
-            C_IF(tankSelected.as_literal()),
+            C_IF(tankSelected),
+            COMMENT('Update commands'),
+        )
+        
+        m.write(
+            EMPTY(),
+            COMMENT('Update Qty Values'),
+            GetData(total, PLC_NAME, f'{tank}.QtyF.ActT'),
+            GetData(maxReq, PLC_NAME, f'{tank}.HLimit'),
+            GetData(minReq, PLC_NAME, f'Program:{tank[0:2]}x.{tank}_F0.Over'),
+            GetData(req, PLC_NAME, f'{tank}.QtyF.Dem'),
+            maxReq.set(maxReq - total),
+            SetData(maxReq, HMI_NAME, 'TankReqMax'),
+            SetData(minReq, HMI_NAME, 'TankReqMin'),
+            IF(maxReq < minReq)(maxReq.set(minReq)),
+            EMPTY(),
+            COMMENT('Alarm'),
+            GetData(plcVal, PLC_NAME, f'{tank}.Alarms.21'),
+            SetData(plcVal, HMI_NAME, f'TankAlarm'),
         )
         
         for command in tank_commands:
@@ -137,26 +162,32 @@ def generate_update_tank_values():
                 hmi_tag = f"Tank{strip_dot(command)}{hmi_val}"
                 m.write(
                     GetData(plcVal, PLC_NAME, plc_tag),
-                    SetData(plcVal, HMI_NAME, hmi_tag)
+                    CONDITIONAL(command == 'QtyF.Play' and value == 'Per',
+                        [plcVal.set(plcVal & (req < maxReq))]),
+                    SetData(plcVal, HMI_NAME, hmi_tag),
                 )
             m.write(EMPTY())
+
+
         # Read float values
         for hmi_part, plc_suffix in float_values.items():
-            if hmi_part not in read_float_values:
-                continue
             plc_tag = f"{tank}.QtyF.{plc_suffix}"
             hmi_tag = f"Tank{hmi_part}"
-            var = plcFloat
-            if hmi_part == "Total":
-                var = plcReqMax
-            m.write(
-                GetData(var, PLC_NAME, plc_tag),
-                SetData(var, HMI_NAME, hmi_tag),
-            )
+            if hmi_part in read_float_values:
+                m.write(
+                    GetData(plcFloat, PLC_NAME, plc_tag),
+                    SetData(plcFloat, HMI_NAME, hmi_tag),
+                )
+            elif hmi_part in write_float_values:
+                m.write(
+                    COMMENT('Read req value'),
+                    GetData(loading, HMI_NAME, LOADING_FLAG_NAME),
+                    IF(loading)(
+                        GetData(plcFloat, PLC_NAME, plc_tag),
+                        SetData(plcFloat, HMI_NAME, hmi_tag),
+                    ),
+                )
         m.write(
-            GetData(plcMax, PLC_NAME, f'{tank}.HLimit'),
-            plcReqMax.set(plcMax - plcReqMax),
-            SetData(plcReqMax, HMI_NAME, 'TankReqMax'),
             COMMENT('Reset loading flag'),
             ASYNC_TRIG_MACRO('ResetLoadingFlag1S'),
             RETURN(),
@@ -165,47 +196,56 @@ def generate_update_tank_values():
 
     m.end()
     m.display()
+    m.clipboard()
 
 # Generate WriteCmd Script
 def generate_write_tank_values():
-    print(header)
-    script = "// Writes the modified values for the tank screen\n"
-    script += "macro_command main()\n"
-    script += "    // Declare variables\n"
-    script += "    float hmiFloat\n"
-    script += "    bool f = false\n"
-    script += "    bool t = true\n"
-    script += "    bool hmiVal, tankSelected\n\n"
+    m = Macro('WriteTankValues', 'Writes the modified values for the tank screen')
+    
+    m.begin()
+    hmiFloat = vfloat('hmiFloat')
+    f = vbool('f', False)
+    t = vbool('t', True)
+    hmiVal = vbool('hmiVal')
+    tankSelected = vbool('tankSelected')
     
     for tank in tanks:
-        script += f"    // {tank} Tank\n"
-        script += f"    GetData(tankSelected, \"{HMI_NAME}\", \"{tank}\", 1)\n"
-        script +=  "    if tankSelected then\n"
+        m.write(
+            COMMENT(f'{tank} Tank'),
+            GetData(tankSelected, HMI_NAME, tank),
+            C_IF(tankSelected),
+        )
         for command in tank_commands:
             for value in write_values:
                 plc_tag = f"{tank}.{command}.{value}"
                 hmi_tag = f"Tank{strip_dot(command)}{value}"
-                script += f"        GetData(hmiVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"        if hmiVal then\n"
-                script += f"            SetData(t, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                script += f"            SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"            return\n"
-                script += f"        end if\n\n"
+                m.write(
+                    GetData(hmiVal, HMI_NAME, hmi_tag),
+                    IF(hmiVal)(
+                        SetData(t, PLC_NAME, plc_tag),
+                        SetData(f, HMI_NAME, hmi_tag),
+                        RETURN(),
+                    )
+                )
             
         for hmi_part, plc_part in float_values.items():
             if hmi_part not in write_float_values:
                 continue
             plc_tag = f"{tank}.QtyF.{plc_part}"
             hmi_tag = f"Tank{hmi_part}"
-            script += f"        GetData(hmiFloat, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-            script += f"        SetData(hmiFloat, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                
-        script += f"        return\n"
-        script += "    end if\n\n"
-        print(script)
-        script = ''
-    script += "end macro_command\n"
-    print(script)
+            m.write(
+                GetData(hmiFloat, HMI_NAME, hmi_tag),
+                SetData(hmiFloat, PLC_NAME, plc_tag),
+            )
+        m.write(
+            RETURN(),
+            C_END_IF(),
+            EMPTY(),
+        )
+        
+    m.end()
+    m.display()
+    m.clipboard()
 
 # Define hopper names and commands
 hoppers = ["H41", "H42", "H43", "H44"]
@@ -218,84 +258,110 @@ hopper_feed_counts = {
 
 # Generate LoadHopperValues Script
 def generate_load_hopper_values():
-    print(header)
-    script = "// Resets all the values for the hopper screen\n"
-    script += "macro_command main()\n"
-    script += "    // Declare variables for data from PLC\n"
-    script += "    bool plcVal\n"
-    script += "    bool f = false\n"
-    script += "    bool t = true\n"
-    script += "    float zero = 0\n"
-    script += "    bool hopperSelected\n"
-    script += "    float plcFloat\n\n"
+    m = Macro('LoadHopperValues', 'Resets all the values for the hopper screen')
+
+    m.begin()
+
+    f = vbool('f', False)
+    t = vbool('t', True)
+    zero = vfloat('zero', 0.0)
+
+
+    m.write(
+        COMMENT('Set loading flag'),
+        SetData(t, HMI_NAME, LOADING_FLAG_NAME),
+        # DELAY(2000),
+        EMPTY(),
+        COMMENT('Reset Command values'),
+    )
     
-    script += f"    // Set loading flag\n"
-    script += f'    SetData(t, "{HMI_NAME}", "{LOADING_FLAG_NAME}", 1)\n\n'
-    script += f'    DELAY(2000)\n'
-    
-    
-    # Disable commands (Lock, Pause, Stop, Zero)
-    script += f"    // Reset Command values\n"
     for command in hopper_commands:
         for value in values:
             hmi_tag = f"Hopper{command}{value}"
-            script += f"    SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
+            # m.write(SetData(f, HMI_NAME, hmi_tag))
 
-
-    script += f"    \n"
-    script += f"    // Reset Hopper Command values\n\n"
+    m.write(
+        EMPTY(),
+        COMMENT('Reset Hopper Command values'),
+    )
+    
     for hmi_part, plc_part in hopper_qty_commands.items():
-        script += f"    // {hmi_part}\n"
+        m.write(COMMENT(hmi_part))
         
         for value in values:
             hmi_tag = f"{hmi_part}Play{value}"
-            script += f"    SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
+            # m.write(SetData(f, HMI_NAME, hmi_tag))
 
         for hmi_part2, plc_part2 in float_values.items():
+            if hmi_part2 in write_float_values:
+                continue
             hmi_tag = f"{hmi_part}{hmi_part2}"
-            script += f"    SetData(zero, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-        script += f"    \n"
-    print(script)
-    script = ''
-    script += "end macro_command\n"
-    print(script)
+            # m.write(SetData(zero, HMI_NAME, hmi_tag))
+        m.write(EMPTY())
+        
+    m.end()
+    m.display()
+    m.clipboard()
 
 # Generate UpdateHopperOnPer Script
 def generate_update_hopper_values():
-    print(header)
-    script = "// Updates the values for the hopper screen\n"
-    script += "macro_command main()\n"
-    script += "    // Declare variables for PLC values\n"
-    script += "    bool plcVal\n"
-    script += "    bool f = false\n"
-    script += "    bool t = true\n"
-    script += "    short e1, e2, e3\n"
-    script += "    float plcFloat\n"
-    script += "    float total, maxReq\n"
-    script += "    bool hopperSelected\n\n"
+    m = Macro('UpdateHopperValues', 'Updates the values for the hopper screen')
+    
+    m.begin()
+    plcVal = vbool('plcVal')
+    f = vbool('f', False)
+    t = vbool('t', True)
+    e1 = vshort('e1')
+    e2 = vshort('e2')
+    e3 = vshort('e3')
+    plcFloat = vfloat('plcFloat')
+    total = vfloat('total')
+    maxReq = vfloat('maxReq')
+    minReq = vfloat('minReq')
+    hopperSelected = vbool('hopperSelected')
+    loading = vbool('loading')
     
     for hopper in hoppers:
-        script += f"    // {hopper} Hopper\n"
-        script += f"    GetData(hopperSelected, \"{HMI_NAME}\", \"{hopper}\", 1)\n"
-        script += f"    if hopperSelected then\n"
+        m.write(
+            COMMENT(f'{hopper} Hopper'),
+            GetData(hopperSelected, HMI_NAME, hopper),
+            C_IF(hopperSelected),
+            COMMENT('Update commands'),
+        )
         
-        script += f"        // Update commands\n"
         # Update commands (Lock, Pause, Stop, Zero)
         for command in hopper_commands:
             for value in read_values:
                 plc_tag = f"{hopper}.{command}.{value}"
                 hmi_tag = f"Hopper{strip_dot(command)}{value}"
-                script += f"        GetData(plcVal, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                script += f"        SetData(plcVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
+                m.write(
+                    GetData(plcVal, PLC_NAME, plc_tag),
+                    SetData(plcVal, HMI_NAME, hmi_tag),
+                )
+            m.write(EMPTY())
 
         # Update Qty values
+        m.write(
+            EMPTY(),
+            COMMENT('Update Qty Values'),
+            GetData(total, PLC_NAME, f'{hopper}.Kg'),
+            GetData(maxReq, PLC_NAME, f'{hopper}.HLimit'),
+            maxReq.set(maxReq - total),
+            IF(maxReq < 0)(maxReq.set(0)),
+            SetData(maxReq, HMI_NAME, 'TankReqMax'),
+            GetData(minReq, PLC_NAME, f'Program:H4x.{hopper}_F0.Over'),
+            SetData(minReq, HMI_NAME, 'Hopper1ReqMin'),
+            *itertools.chain(*[(
+                    GetData(minReq, PLC_NAME, f'Program:H4x.{hopper}_w{ii}.Over'), 
+                    SetData(minReq, HMI_NAME, f'Hopper{ii}ReqMin')
+                ) for ii in range(1, hopper_feed_counts[hopper] + 1)]),
+            EMPTY(),
+            COMMENT('Alarms'),
+            GetData(plcVal, PLC_NAME, f'{hopper}.Alarms.21'),
+            SetData(plcVal, HMI_NAME, 'Hopper1Alarm'),
+            *itertools.chain(*[(GetData(plcVal, PLC_NAME, f'{hopper}.Alarms.1{a}'), SetData(plcVal, HMI_NAME, f'Hopper{a+1}Alarm')) for a in range(1, hopper_feed_counts[hopper] + 1)]),
+        )
         i = 0
-        script += f"        \n"
-        script += f"        // Update Qty Values\n"
-        script += f"        GetData(total, \"{PLC_NAME}\", \"{hopper}.Kg\", 1)\n"
-        script += f"        GetData(maxReq, \"{PLC_NAME}\", \"{hopper}.HLimit\", 1)\n"
-        script += f"        maxReq = maxReq - total\n"
-        script += f"        SetData(maxReq, \"{HMI_NAME}\", \"TankReqMax\", 1)\n"
         for hmi_part, plc_part in hopper_qty_commands.items():
             if i > hopper_feed_counts[hopper]:
                 break
@@ -304,71 +370,94 @@ def generate_update_hopper_values():
             for value in read_values:
                 plc_tag = f"{hopper}.{plc_part}.Play.{value}"
                 hmi_tag = f"{hmi_part}Play{value}"
-                script += f"        GetData(plcVal, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                script += f"        SetData(plcVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-
+                m.write(
+                    GetData(plcVal, PLC_NAME, plc_tag),
+                    SetData(plcVal, HMI_NAME, hmi_tag),
+                )
+            
             for hmi_part2, plc_part2 in float_values.items():
-                if hmi_part2 not in read_float_values:
-                    continue
                 plc_tag = f"{hopper}.{plc_part}.{plc_part2}"
                 hmi_tag = f"{hmi_part}{hmi_part2}"
-                script += f"        GetData(plcFloat, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                script += f"        SetData(plcFloat, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-            print(script)
-            script = ''
+                if hmi_part2 in read_float_values:
+                    m.write(
+                        GetData(plcFloat, PLC_NAME, plc_tag),
+                        SetData(plcFloat, HMI_NAME, hmi_tag),
+                    )
+                elif hmi_part2 in write_float_values:
+                    m.write(
+                        COMMENT('Read req value'),
+                        GetData(loading, HMI_NAME, LOADING_FLAG_NAME),
+                        IF(loading)(
+                            GetData(plcFloat, PLC_NAME, plc_tag),
+                            SetData(plcFloat, HMI_NAME, hmi_tag),
+                        ),
+                    )
             
-        
-        script += f"        \n"
-        script += f"        // Update Field visibility\n"
+        m.write(
+            EMPTY(),
+            COMMENT('Update Field visibility'),
+        )
+        errors = [e1, e2, e3]
         for i, ii in enumerate(range(3, 6)):
             hmi_tag = f"Hopper{ii}Present"
             if ii - 1 > (hopper_feed_counts[hopper]):
-                script += f"        SetDataEx(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f'        GetError(e{i+1})\n'
+                m.write(
+                    SetDataEx(f, HMI_NAME, hmi_tag),
+                    GetError(errors[i])
+                )
             else:
-                script += f"        SetDataEx(t, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f'        GetError(e{i+1})\n'
-        script += f"        \n"
-        script += f"        // Reset loading flag\n"
-        script += f'        if e1 == 0 and e2 == 0 and e3 == 0 then\n'
-        script += f'            ASYNC_TRIG_MACRO("ResetLoadingFlag2S")\n'
-        script += f'        end if\n'
-        script += f'        return\n'
-        script += "    end if\n\n"
-        print(script)
-        script = ''
-    script += "end macro_command\n"
-    print(script)
+                m.write(
+                    SetDataEx(t, HMI_NAME, hmi_tag),
+                    GetError(errors[i])
+                )
+        m.write(
+            EMPTY(),
+            COMMENT('Reset loading flag'),
+            IF(AND(e1 == 0, e2 == 0, e3 == 0))(
+                ASYNC_TRIG_MACRO("ResetLoadingFlag2S")
+            ),
+            RETURN(),
+            C_END_IF(),
+            EMPTY(),
+        )
+
+    m.end()
+    m.display()
+    m.clipboard()
 
 # Generate WriteHopperReq Script
 def generate_write_hopper_values():
-    print(header)
-    script = "// Writes the modified values for the hopper screen\n"
-    script += "macro_command main()\n"
-    script += "    // Declare variable\n"
-    script += "    bool hmiVal\n"
-    script += "    bool f = false\n"
-    script += "    bool t = true\n"
-    script += "    float hmiFloat\n"
-    script += "    bool hopperSelected\n\n"
+    m = Macro('SendHopperValues', 'Writes the modified values for the hopper screen')
     
+    m.begin()
+    
+    hmiVal = vbool('hmiVal')
+    f = vbool('f', False)
+    t = vbool('t', True)
+    hmiFloat = vfloat('hmiFloat')
+    hopperSelected = vbool('hopperSelected')
     
     for hopper in hoppers:
-        script += f"    // {hopper} Hopper\n"
-        script += f"    GetData(hopperSelected, \"{HMI_NAME}\", \"{hopper}\", 1)\n"
-        script += f"    if hopperSelected then\n"
+        m.write(
+            COMMENT(f'{hopper} Hopper'),
+            GetData(hopperSelected, HMI_NAME, hopper),
+            C_IF(hopperSelected),
+        )
         
         # Write commands (Lock, Pause, Stop, Zero)
         for command in hopper_commands:
             for value in write_values:
                 plc_tag = f"{hopper}.{command}.{value}"
                 hmi_tag = f"Hopper{strip_dot(command)}{value}"
-                script += f"        GetData(hmiVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"        if hmiVal then\n"
-                script += f"            SetData(t, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                script += f"            SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"            return\n"
-                script += f"        end if\n\n"
+                m.write(
+                    GetData(hmiVal, HMI_NAME, hmi_tag),
+                    IF(hmiVal)(
+                        SetData(t, PLC_NAME, plc_tag),
+                        SetData(f, HMI_NAME, hmi_tag),
+                        RETURN(),
+                    ),
+                    EMPTY(),
+                )
                 
         # Write Qty values
         i = 0
@@ -379,25 +468,32 @@ def generate_write_hopper_values():
             for value in write_values:
                 plc_tag = f"{hopper}.{plc_part}.Play.{value}"
                 hmi_tag = f"{hmi_part}Play{value}"
-                script += f"        GetData(hmiVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"        if hmiVal then\n"
-                script += f"            SetData(t, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-                script += f"            SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"            return\n"
-                script += f"        end if\n\n"
+                m.write(
+                    GetData(hmiVal, HMI_NAME, hmi_tag),
+                    IF(hmiVal)(
+                        SetData(t, PLC_NAME, plc_tag),
+                        SetData(f, HMI_NAME, hmi_tag),
+                        RETURN()
+                    ),
+                    EMPTY(),
+                )
                 
             for hmi_part2, plc_part2 in float_values.items():
                 if hmi_part2 not in write_float_values:
                     continue
                 plc_tag = f"{hopper}.{plc_part}.{plc_part2}"
                 hmi_tag = f"{hmi_part}{hmi_part2}"
-                script += f"        GetData(hmiFloat, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-                script += f"        SetData(hmiFloat, \"{PLC_NAME}\", \"{plc_tag}\", 1)\n"
-        script += "    end if\n\n"
-        print(script)
-        script = ''
-    script += "end macro_command\n"
-    print(script)
+                m.write(
+                    GetData(hmiFloat, HMI_NAME, hmi_tag),
+                    SetData(hmiFloat, PLC_NAME, plc_tag),
+                )
+        m.write(
+            C_END_IF(),
+            EMPTY(),
+        )
+    m.end()
+    m.display()
+    m.clipboard()
 
 valves = [
     'V80100',
@@ -454,78 +550,90 @@ valve_write_values = {
 }
 
 def load_valve_values():
-    print(header)
-    script = "// Resets all the values for the valve screen\n"
-    script += "macro_command main()\n"
-    script += "    // Declare variable\n"
-    script += "    bool t = true\n"
-    script += "    bool f = false\n"
+    m = Macro('LoadValveValues', 'Resets all the values for the valve screen')
     
-    script += f"    // Set loading flag\n"
-    script += f'    SetData(t, "{HMI_NAME}", "{LOADING_FLAG_NAME}", 1)\n'
+    m.begin()
     
-    for hmi_tag, plc_suffix in valve_read_values.items():
-        script += f"    SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-    for hmi_tag, plc_suffix in valve_write_values.items():
-        script += f"    SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-    print(script)
-    script = ''
+    t = vbool('t', True)
+    f = vbool('f', False)
     
-    script += "end macro_command\n"
-    print(script)
+    m.write(
+        COMMENT('Set loading flag'),
+        SetData(t, HMI_NAME, LOADING_FLAG_NAME),
+    )
+    
+    # for hmi_tag, plc_suffix in valve_read_values.items():
+    #     m.write(SetData(f, HMI_NAME, hmi_tag))
+    # for hmi_tag, plc_suffix in valve_write_values.items():
+    #     m.write(SetData(f, HMI_NAME, hmi_tag))
+    
+    m.end()
+    m.display()
+    m.clipboard()
     
 def read_valve_values():
-    print(header)
-    script = "// Reads the values for the valve screen\n"
-    script += "macro_command main()\n"
-    script += f"    // Declare variable\n"
-    script += f"    bool plcVal\n"
-    script += f"    bool f = false\n"
-    script += f"    bool t = true\n"
-    script += f"    bool valveSelected\n\n"
+    m = Macro('UpdateValveValues', 'Reads the values for the valve screen')
+    
+    m.begin()
+    
+    plcVal = vbool('plcVal')
+    f = vbool('f', False)
+    t = vbool('t', True)
+    valveSelected = vbool('valveSelected')
     
     for valve in valves:
-        script += f"    // {valve} Valve\n"
-        script += f"    GetData(valveSelected, \"{HMI_NAME}\", \"{valve}\", 1)\n"
-        script += f"    if valveSelected then\n"
+        m.write(
+            COMMENT(f'{valve} Valve'),
+            GetData(valveSelected, HMI_NAME, valve),
+            C_IF(valveSelected),
+        )
         for hmi_tag, plc_suffix in valve_read_values.items():
-            script += f"        GetData(plcVal, \"{PLC_NAME}\", \"{valve}.{plc_suffix}\", 1)\n"
-            script += f"        SetData(plcVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-        script += f"        // Reset loading flag\n"
-        script += f'        ASYNC_TRIG_MACRO("ResetLoadingFlag0S")\n'
-        script += f"        return\n"
-        script += f"    end if\n\n"
-        print(script)
-        script = ''
-    
-    script += "end macro_command\n"
-    print(script)
+            m.write(
+                GetData(plcVal, PLC_NAME, f'{valve}.{plc_suffix}'),
+                SetData(plcVal, HMI_NAME, hmi_tag),
+            )
+        m.write(
+            COMMENT('Reset loading flag'),
+            ASYNC_TRIG_MACRO('ResetLoadingFlag0S'),
+            RETURN(),
+            C_END_IF(),
+            EMPTY(),
+        )
+    m.end()
+    m.display()
+    m.clipboard()
 
 def send_valve_values():
-    print(header)
-    script = "// Writes the modified values for the valve screen\n"
-    script += "macro_command main()\n"
-    script += "    // Declare variable\n"
-    script += "    bool hmiVal\n"
-    script += "    bool f = false\n"
-    script += "    bool t = true\n"
-    script += "    bool valveSelected\n\n"
+    m = Macro('SendValveValues', 'Writes the modified values for the valve screen')
+    
+    m.begin()
+    
+    hmiVal = vbool('hmiVal')
+    f = vbool('f', False)
+    t = vbool('t', True)
+    valveSelected = vbool('valveSelected')
     
     for valve in valves:
-        script += f"    // {valve} Valve\n"
-        script += f"    GetData(valveSelected, \"{HMI_NAME}\", \"{valve}\", 1)\n"
-        script += f"    if valveSelected then\n"
+        m.write(
+            COMMENT(f'{valve} Valve'),
+            GetData(valveSelected, HMI_NAME, valve),
+            C_IF(valveSelected),
+        )
+        
         for hmi_tag, plc_suffix in valve_write_values.items():
-            script += f"        GetData(hmiVal, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-            script += f"        SetData(hmiVal, \"{PLC_NAME}\", \"{valve}.{plc_suffix}\", 1)\n"
-            script += f"        SetData(f, \"{HMI_NAME}\", \"{hmi_tag}\", 1)\n"
-        script += f"        return\n"
-        script += f"    end if\n\n"
-        print(script)
-        script = ''
-    
-    script += "end macro_command\n"
-    print(script)
+            m.write(
+                GetData(hmiVal, HMI_NAME, hmi_tag),
+                SetData(hmiVal, PLC_NAME, f'{valve}.{plc_suffix}'),
+                SetData(f, HMI_NAME, hmi_tag),
+            )
+        m.write(
+            RETURN(),
+            C_END_IF(),
+            EMPTY(),
+        )
+    m.end()
+    m.display()
+    m.clipboard()
 
 def generate_tank_lock_load():
     print(header)
@@ -567,16 +675,19 @@ def generate_tank_lock_write():
     print(script)
 
 def reset_values(vars:list):
-    print(header)
-    script = "// Resets the selection flags for the screen\n"
-    script += "macro_command main()\n"
-    script += "    // Reset all selection values\n"
-    script += "    bool f = false\n\n"
-    for v in vars:
-        script += f"    SetData(f, \"{HMI_NAME}\", \"{v}\", 1)\n"
-        
-    script += "\nend macro_command\n\n"
-    print(script)
+    m = Macro('ResetValues', 'Resets the selection flags for the screen')
+    
+    m.begin()
+    
+    f = vbool('f', False)
+    
+    m.write(
+        *[SetData(f, HMI_NAME, v) for v in vars],
+    )
+    
+    m.end()
+    m.display()
+    m.clipboard()
 
 TANK_VALVES_MAP = {
     'C21' : 'V80121',
@@ -591,40 +702,316 @@ TANK_VALVES_MAP = {
     'F34' : 'V80134',
     'F35' : 'V80135',
     'W11' : 'V80111',
-    'W12' : 'V80112',
     'M50' : 'V80150',
 }
 
 
 def generate_tank_consts():
+    
     print(header)
     script =  f''
     for i, t in enumerate(tanks):
         script += f'short G_{t} = {i}'
     print(script)
 
-def generate_sim_tank():
-    print(header)
-    script =  f"// Resets all the values for the tank_lock screen\n"
-    script += f"macro_command main()\n"
-    script += f"    // Declare variable\n"
-    script += f"    bool t = true\n"
-    script += f"    bool f = false\n"
-    script += f"    float level\n"
-    script += f"    float dem\n"
-    script += f"    short id\n"
-    script += f"    \n"
+def generate_sim_tank(part:int):
+    m = Macro('SimTank', 'Simulates the behavior of a tank')
+    
+    m.begin()
+    
+    f = vbool('f', False)
+    t = vbool('t', True)
+    PlayOn = vbool('PlayOn')
+    PlaySel = vbool('PlaySel')
+    PlayPer = vbool('PlayPer')
+    PlayCmd = vbool('PlayCmd')
+    LockOn = vbool('LockOn')
+    LockSel = vbool('LockSel')
+    LockPer = vbool('LockPer')
+    LockCmd = vbool('LockCmd')
+    PauseOn = vbool('PauseOn')
+    PauseSel = vbool('PauseSel')
+    PausePer = vbool('PausePer')
+    PauseCmd = vbool('PauseCmd')
+    StopOn = vbool('StopOn')
+    StopSel = vbool('StopSel')
+    StopPer = vbool('StopPer')
+    StopCmd = vbool('StopCmd')
+    ZeroOn = vbool('ZeroOn')
+    ZeroSel = vbool('ZeroSel')
+    ZeroPer = vbool('ZeroPer')
+    ZeroCmd = vbool('ZeroCmd')
+    
+    On = vbool('On')
+    InjOn = vbool('InjOn')
+    
+    # QtyF Variables
+    F0_On = vbool('F0_On')
+    F0_End = vbool('F0_End')
+    F0_Off = vbool('F0_Off')
+    F0_Raz = vbool('F0_Raz')
+    F0_ReqOk = vbool('F0_ReqOk')
+    F0_ReqBad = vbool('F0_ReqBad')
+    
+    zero = vfloat('zero', 0.0)
+    Actual = vfloat('Actual')
+    Total = vfloat('Total')
+    Dem = vfloat('Dem')
+    Req = vfloat('Req')
+    Rem = vfloat('Rem')
+    HLimit = vfloat('HLimit', 500)
+    HLAL = vfloat('HLAL', 550)
+    id = vshort('id')
+    Flow = vfloat('Flow')
+    FlowLow = vfloat('FlowLow', 50.0)
+    Alarm0 = vbool('Alarm0')
+    Alarm10 = vbool('Alarm10')
+    
+    # Timers
+    F0_Traz = TIMER('Traz')
+    F0_Tcorr = TIMER('Tcorr')
+    
+    # F0 map
+    F0_map:Dict[str, Variable] = {
+        'On' : F0_On,
+        'End' : F0_End,
+        'Off' : F0_Off,
+        'Raz' : F0_Raz,
+        'ReqOk' : F0_ReqOk,
+        'ReqBad' : F0_ReqBad,
+    }
+    
+    # All commands
+    all_values_map:Dict[str, Variable[bool]] = {
+        'On' : On,
+        'InjOn' : InjOn,
+        'Alarms.0' : Alarm0,
+        'Alarms.10' : Alarm10,
+    }
+    
+    # Commands read by HMI
+    read_commands_map:Dict[str, Variable[bool]] = {}
+    
+    # Commands written by the HMI
+    write_commands_map:Dict[str, Variable[bool]] = {}
+    float_map = {
+        f"QtyF.{float_values['Actual']}" : Actual,
+        f"QtyF.{float_values['Remaining']}" : Rem,
+        f"QtyF.{float_values['Req']}" : Req,
+        f"QtyF.{float_values['Total']}" : Total,
+        'QtyF.Dem' : Dem,
+    }
+    
+    mirror_map = {
+        'L' : Total,
+        'HLimit' : HLimit,
+        'HLAL' : HLAL,
+    }
     
     
-    script += f'    id = GetValue()'
+    for cmd in tank_commands:
+        trunc_cmd = cmd.replace('QtyF.', '')
+        for a in values:
+            all_values_map[f'{cmd}.{a}'] = eval(f'{trunc_cmd}{a}')
+        for a in read_values:
+            read_commands_map[f'{cmd}.{a}'] = eval(f'{trunc_cmd}{a}')
+        for a in write_values:
+            write_commands_map[f'{cmd}.{a}'] = eval(f'{trunc_cmd}{a}')
     
-    for i, t in enumerate|(tanks):
-        script += f'    if id == i'
+    m.write(
+        GetData(id, HMI_NAME, 'SIM_id'),
+        EMPTY(),
+    )
+    
+    for i, tank in enumerate(tanks[:7] if part == 0 else tanks[7:]):
+        m.write(
+            COMMENT(tank),
+            C_IF(id == i),
+            COMMENT('Read values'),
+        )
+        
+        for plc_suffix, var in all_values_map.items():
+            m.write(
+                GetData(var, PLC_NAME, f'{tank}.{plc_suffix}')
+            )
+        
+        m.write(EMPTY())
+        
+        for plc_suffix, var in float_map.items():
+            m.write(
+                GetData(var, PLC_NAME, f'{tank}.{plc_suffix}'),
+            )
+        
+        m.write(EMPTY())
+        for plc_suffix, var in F0_map.items():
+            m.write(
+                GetData(var, PLC_NAME, f'Program:{tank[:2]}x.{tank}_F0.{plc_suffix}')
+            )
+            
+        m.write(EMPTY())
+        for index, timer in { '0':F0_Traz, '1':F0_Tcorr}.items():
+            m.write(*timer.GetData(f'{tank}.T.{index}'))
+        
+        m.write(
+            EMPTY(),
+            COMMENT('Tank behavior'),
+            EMPTY(),
+            COMMENT('QtyF behavior'),
+            F0_ReqOk.set(Dem != 0),
+            F0_ReqBad.set(~F0_ReqOk & (Dem != 0)),
+            PlayPer.set(F0_ReqOk & ~F0_Traz.TT & ~LockSel),
+            IF(PlayPer & PlayCmd)(
+                PlaySel.set(True),
+                PauseSel.set(False),
+                IF(~F0_On)(
+                    Actual.set(0),
+                    F0_On.set(True),
+                    F0_End.set(False),
+                    F0_Off.set(False),
+                    F0_Raz.set(False),
+                ),
+            ),
+            IF((PlaySel | F0_End) & ~F0_Off)(
+                COMMENT('Flow per 100ms'),
+                Actual.set(Actual + (Flow / 600)),
+                Total.set(Total + Flow / 600),
+                SetData(Flow, PLC_NAME, 'FT80101.PV'),
+                Rem.set(Dem - Actual),
+                IF(Rem <= 0)(
+                    F0_End.set(True),
+                    PlaySel.set(True),
+                ),
+            ).ELSE()( SetData(zero, PLC_NAME, 'FT80101.PV') ),
+            F0_Tcorr.PRE.set(3000),
+            F0_Tcorr.EN.set(F0_End & ~F0_Off),
+            F0_Tcorr.TON(),
+            IF(F0_End & ~F0_Off & F0_Tcorr.DN)(
+                F0_Off.set(True),
+            ),
+            F0_Traz.EN.set(~PlaySel & ~PauseSel & ~LockSel),
+            F0_Traz.PRE.set(5000),
+            IF(~PlaySel & ~PauseSel & ~LockSel & F0_Traz.DN & ~F0_Raz)(
+                Actual.set(0.0),
+                Rem.set(0.0),
+                F0_Raz.set(True),
+                F0_On.set(False),
+            ),
+            IF(F0_Raz & ZeroSel)(
+                Actual.set(0.0),
+                Total.set(0.0),
+                Rem.set(0.0),
+                F0_On.set(False),
+                F0_End.set(False),
+                F0_Off.set(False),
+                F0_Raz.set(False),
+            ),
+            IF(PauseSel | LockSel)( PlaySel.set(False) ),
+            EMPTY(),
+            COMMENT('Pause command'),
+            PausePer.set(On),
+            IF(On & PauseCmd) ( PauseSel.set(True) ),
+            EMPTY(),
+            COMMENT('Stop command'),
+            StopPer.set(PauseSel | LockSel),
+            IF(StopPer & StopCmd)(
+                PauseSel.set(False),
+                LockSel.set(False),
+            ),
+            EMPTY(),
+            COMMENT('Zero and Lock commands'),
+            StopSel.set(~On & ~PauseSel & ~LockSel),
+            ZeroPer.set(StopSel),
+            LockPer.set(StopSel),
+            ZeroSel.set(ZeroPer & ZeroCmd),
+            IF(LockPer & LockCmd) ( LockSel.set(True) ),
+            EMPTY(),
+            COMMENT('Reset commands'),
+            *[v.set(False) for v in [PlayCmd, PauseCmd, StopCmd, ZeroCmd, LockCmd]],
+            EMPTY(),
+            COMMENT('Status'),
+            On.set(F0_On),
+            PlayOn.set(On & PlaySel),
+            InjOn.set(PlayOn),
+            *[k.set(v) for k, v in {PauseSel : PauseOn, StopSel : StopOn, ZeroSel : ZeroOn, LockSel : LockOn}.items()],
+            EMPTY(),
+            COMMENT('Alarms'),
+            Alarm0.set(F0_ReqBad),
+            IF(F0_ReqBad)( PauseCmd.set(True) ),
+            IF(PlayOn & (Flow <= FlowLow))(
+                Alarm10.set(True),
+                PauseCmd.set(True),
+            ).ELSE()( Alarm10.set(False) ),
+        )
+        
+        m.write(
+            EMPTY(),
+            COMMENT('Write values'),
+        )
+        
+        for plc_suffix, var in all_values_map.items():
+            m.write(
+                SetData(var, PLC_NAME, f'{tank}.{plc_suffix}')
+            )
+        
+        m.write(EMPTY())
+        
+        for plc_suffix, var in float_map.items():
+            m.write(
+                SetData(var, PLC_NAME, f'{tank}.{plc_suffix}'),
+            )
+        
+        for plc_suffix, var in mirror_map.items():
+            m.write(
+                SetData(var, PLC_NAME, f'{tank}.{plc_suffix}'),
+            )
+            
+        m.write(EMPTY())
+        for index, timer in { '0':F0_Traz, '1':F0_Tcorr}.items():
+            m.write(*timer.SetData(f'{tank}.T.{index}'))
+            
+        m.write(
+            C_END_IF(),
+            EMPTY(),
+        )
+    
+    m.end()
+    m.display()
+    m.clipboard()
+        
+        
+def generate_sim_tank_valves():
+    m = Macro('SimTankValve', 'Simulates the behavior of a tank valve')
+    
+    m.begin()
+    
+    f = vbool('f', False)
+    t = vbool('t', True)
+    valveSelected = vbool('valveSelected')
+    
+    # All commands
+    all_values_map:Dict[str, Variable[bool]] = {
+    }
+    
+    for tank, valve in TANK_VALVES_MAP.items():
+        m.write(
+            COMMENT(f'{valve} ({tank})'),
+            GetData(valveSelected, HMI_NAME, valve),
+            C_IF(valveSelected),
+            COMMENT('Read values'),
+        )
+        
+        for plc_suffix, var in all_values_map.items():
+            m.write(
+                GetData(var, PLC_NAME, f'{valve}.{plc_suffix}')
+            )
+        
+        m.write(EMPTY())
+    
         
 def test_simple_macro():
     m = Macro("Test", "A test macro")
     
-    m.prepare()
+    m.begin()
     
     tankSelected:Variable[bool] = Variable('tankSelected', 'bool')
     
@@ -632,7 +1019,7 @@ def test_simple_macro():
         m.write(
             COMMENT(f'{tank} Tank'),
             GetData(tankSelected, HMI_NAME, tank),
-            IF(tankSelected.as_literal())(
+            IF(tankSelected)(
                 COMMENT(f'{tank} selected'),
             ),
             EMPTY(),
@@ -650,20 +1037,23 @@ if __name__ == "__main__":
     
     # TODO Add W11, W12 and M50
     # generate_load_tank_values()
-    generate_update_tank_values()
+    # generate_update_tank_values()
     # generate_write_tank_values()
     # reset_values(tanks)
 
     # Output the new scripts for hoppers
     # generate_load_hopper_values()
-    # generate_update_hopper_values()
+    generate_update_hopper_values()
     # generate_write_hopper_values()
     # reset_values(hoppers)
-
 
     # load_valve_values()
     # read_valve_values()
     # send_valve_values()
     # reset_values(valves)
+    
+    # generate_sim_tank(0)
+    # input()
+    # generate_sim_tank(1)
     
     # test_simple_macro().display()

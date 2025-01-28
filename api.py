@@ -2,7 +2,10 @@ from __future__ import annotations
 from enum import Enum
 from collections import deque
 from itertools import repeat
+from tkinter import Variable
 from typing import Any, Callable, Generic, List, Literal, LiteralString, Set, TypeVar, Union, overload
+
+import pyperclip
 
 
 PLC_NAME = "Rockwell EtherNet/IP (CompactLogix)"
@@ -65,8 +68,10 @@ class COMMENT(STATEMENT):
         return ''.join([f'// {l}\n' for l in self.text.splitlines(False)])
 
 class C_IF(STATEMENT):
-    def __init__(self, condition:EXPRESSION):
+    def __init__(self, condition:Union[EXPRESSION, Variable[bool]]):
         super().__init__()
+        if isinstance(condition, Variable):
+            condition = condition.as_literal()
         self.condition = condition
         
     def __str__(self) -> str:
@@ -202,8 +207,10 @@ class C_ELSE(STATEMENT):
         macro._open_if()
 
 class C_ELIF(STATEMENT):
-    def __init__(self, condition:EXPRESSION):
+    def __init__(self, condition:Union[EXPRESSION, Variable[bool]]):
         super().__init__()
+        if isinstance(condition, Variable):
+            condition = condition.as_literal()
         self.condition = condition
     
     def __str__(self) -> str:
@@ -229,6 +236,15 @@ class C_END_IF(STATEMENT):
     def bake(self, macro:Macro):
         macro._close_if()
         super().bake(macro)
+
+class BLOCK(STATEMENT):
+    def __init__(self, *statements:STATEMENT):
+        super().__init__(*statements)
+        self.statements = statements
+    
+    def bake(self, macro):
+        for s in self.statements:
+            s.bake(macro)
 
 class VARIABLE_BLOCK(STATEMENT):
     def __init__(self):
@@ -333,13 +349,17 @@ class EXPRESSION(Resource):
     def __init__(self, *exps:EXPRESSION):
         super().__init__(*exps)
     
-    def __and__(self, other:EXPRESSION) -> EXPRESSION:
+    def __and__(self, other:Union[EXPRESSION, Variable[bool]]) -> EXPRESSION:
+        if isinstance(other, Variable):
+            other = other.as_literal()
         return AND(self, other)
     
-    def __or__(self, other:EXPRESSION) -> EXPRESSION:
+    def __or__(self, other:Union[EXPRESSION, Variable[bool]]) -> EXPRESSION:
+        if isinstance(other, Variable):
+            other = other.as_literal()
         return OR(self, other)
     
-    def __inv__(self) -> EXPRESSION:
+    def __invert__(self) -> EXPRESSION:
         return NOT(self)
     
     def __str__(self) -> str: ...
@@ -358,9 +378,9 @@ class LITERAL(EXPRESSION):
 class NOT(EXPRESSION):
     def __init__(self, expression:EXPRESSION):
         super().__init__(expression)
-        self.expression = expression
+        self.expression = expression.as_literal() if isinstance(expression, Variable) else expression
         
-    def __inv__(self) -> EXPRESSION:
+    def __invert__(self) -> EXPRESSION:
         return self.expression
         
     def __str__(self) -> str:
@@ -372,9 +392,11 @@ class NOT(EXPRESSION):
 class OR(EXPRESSION):
     def __init__(self, *expressions:EXPRESSION):
         super().__init__(*expressions)
-        self._expressions:List[EXPRESSION] = list(expressions)
+        self._expressions:List[EXPRESSION] = [*[(e.as_literal() if isinstance(e, Variable) else e) for e in expressions]]
     
-    def __or__(self, other:EXPRESSION) -> OR:
+    def __or__(self, other:Union[EXPRESSION, Variable[bool]]) -> OR:
+        if isinstance(other, Variable):
+            other = other.as_literal()
         if isinstance(other, OR):
             return OR(*self._expressions, *other._expressions)
         return super().__or__(self, other)
@@ -390,14 +412,16 @@ class OR(EXPRESSION):
         return f'[{" OR ".join([repr(e) for e in self._expressions])}]'
         
 class AND(EXPRESSION):
-    def __init__(self, *expressions:EXPRESSION):
+    def __init__(self, *expressions:Union[EXPRESSION, Variable[bool]]):
         super().__init__(*expressions)
-        self._expressions:List[EXPRESSION] = list(expressions)
+        self._expressions:List[EXPRESSION] = [*[(e.as_literal() if isinstance(e, Variable) else e) for e in expressions]]
         
     def __and__(self, other:EXPRESSION) -> AND:
+        if isinstance(other, Variable):
+            other = other.as_literal()
         if isinstance(other, AND):
             return AND(*self._expressions, *other._expressions)
-        return super().__and__(self, other)
+        return super().__and__(other)
         
     def append(self, *expressions:EXPRESSION):
         self._expressions.extend(expressions)
@@ -434,7 +458,6 @@ class Variable(Resource, Generic[DT]):
     def __eq__(self, o:Union[int, float, bool, str]) -> LITERAL:
         return LITERAL(f'{self.name} == {o}')
     
-    @overload
     def __eq__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
         self.resources.append(o)
         return LITERAL(f'{self.name} == {str(o)}')
@@ -443,7 +466,6 @@ class Variable(Resource, Generic[DT]):
     def __ne__(self, o:Union[int, float, bool, str]) -> LITERAL:
         return LITERAL(f'{self.name} <> {o}')
     
-    @overload
     def __ne__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
         self.resources.append(o)
         return LITERAL(f'{self.name} <> {str(o)}')
@@ -452,7 +474,6 @@ class Variable(Resource, Generic[DT]):
     def __lt__(self, o:Union[int, float, bool, str]) -> LITERAL:
         return LITERAL(f'{self.name} < {o}')
     
-    @overload
     def __lt__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
         self.resources.append(o)
         return LITERAL(f'{self.name} < {str(o)}')
@@ -461,7 +482,6 @@ class Variable(Resource, Generic[DT]):
     def __le__(self, o:Union[int, float, bool, str]) -> LITERAL:
         return LITERAL(f'{self.name} <= {o}')
     
-    @overload
     def __le__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
         self.resources.append(o)
         return LITERAL(f'{self.name} <= {str(o)}')
@@ -470,7 +490,6 @@ class Variable(Resource, Generic[DT]):
     def __gt__(self, o:Union[int, float, bool, str]) -> LITERAL:
         return LITERAL(f'{self.name} > {o}')
     
-    @overload
     def __gt__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
         self.resources.append(o)
         return LITERAL(f'{self.name} > {str(o)}')
@@ -479,10 +498,18 @@ class Variable(Resource, Generic[DT]):
     def __ge__(self, o:Union[int, float, bool, str]) -> LITERAL:
         return LITERAL(f'{self.name} >= {o}')
     
-    @overload
     def __ge__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
         self.resources.append(o)
         return LITERAL(f'{self.name} >= {str(o)}')
+    
+    def __and__(self, o:Union[EXPRESSION, Variable[bool]]) -> AND:
+        return AND(self, o)
+    
+    def __or__(self, o:Union[EXPRESSION, Variable[bool]]) -> OR:
+        return OR(self, o)
+    
+    def __invert__(self) -> NOT:
+        return NOT(self)
     
     def __sub__(self, o) -> LITERAL:
         res = LITERAL(f'{str(self)} - {str(o)}')
@@ -505,7 +532,7 @@ class Variable(Resource, Generic[DT]):
             res.resources.append(o)
         return res
     
-    def __div__(self, o) -> LITERAL:
+    def __truediv__(self, o) -> LITERAL:
         res = LITERAL(f'{str(self)} / {str(o)}')
         res.resources.append(self)
         if isinstance(o, Resource):
@@ -615,7 +642,7 @@ class Macro:
         self._nest.pop()
         self.indentation -= 1
         
-    def prepare(self):
+    def begin(self):
         self.write(
             COMMENT(header),
             EMPTY(),
@@ -630,6 +657,7 @@ class Macro:
         self.write(END_MACRO())
     
     def display(self):
+        self.result = ['']
         for s in self.statements:
             s.process(self)
         
@@ -638,15 +666,157 @@ class Macro:
         
         for l in self.result:
             print(l, end='')
+            
+    def clipboard(self):
+        self.result = ['']
+        for s in self.statements:
+            s.process(self)
+        
+        for s in self.statements:
+            s.bake(self)
+        pyperclip.copy(''.join(self.result))
+        
+
+class CONDITIONAL(STATEMENT):
+    def __init__(self, condition:Union[bool, Callable[[], bool]], 
+                 onTrue:List[STATEMENT]=None, onFalse:List[STATEMENT]=None):
+        super().__init__()
+        self.condition = condition
+        self.onTrue = onTrue
+        self.onFalse = onFalse
+        
+    @property
+    def result(self) -> bool:
+        if callable(self.condition):
+            return self.condition()
+        return self.condition
+        
+    def process(self, macro:Macro):
+        if self.result:
+            if self.onTrue is not None:
+                for s in self.onTrue:
+                    s.process(macro)
+        else:
+            if self.onFalse is not None:
+                for s in self.onFalse:
+                    s.process(macro)
+        super().process(macro)
+    
+    def bake(self, macro:Macro):
+        if self.result:
+            if self.onTrue is not None:
+                for s in self.onTrue:
+                    s.bake(macro)
+        else:
+            if self.onFalse is not None:
+                for s in self.onFalse:
+                    s.bake(macro)
+
+class TON(STATEMENT):
+    def __init__(self, timer:TIMER):
+        self.timer = timer
+        super().__init__(timer)
+        self.body = IF(self.timer.EN)(
+            IF(~self.timer.TT & ~self.timer.DN)(
+                self.timer.ACC.set(0),
+                self.timer.TT.set(True),
+                self.timer.DN.set(False),
+            ),
+            IF(~self.timer.DN & self.timer.ACC <= self.timer.PRE)(
+                self.timer.ACC.set(self.timer.ACC + 100)
+            ).ELSE()(
+                self.timer.DN.set(True),
+                self.timer.TT.set(False)
+            )
+        ).ELSE()(
+            self.timer.DN.set(False),
+            self.timer.ACC.set(0),
+            self.timer.TT.set(False),
+        )
+    
+    def bake(self, macro:Macro):
+        self.body.bake(macro)
+        
+    def process(self, macro:Macro):
+        self.body.process(macro)
+
+class TIMER(Resource):
+    def __init__(self, name:str):
+        self.name = name
+        self.EN = vbool(f'{name}_EN')
+        self.TT = vbool(f'{name}_TT')
+        self.DN = vbool(f'{name}_DN')
+        self.PRE = vint(f'{name}_PRE')
+        self.ACC = vint(f'{name}_ACC')
+        super().__init__(self.EN, self.TT, self.DN, self.PRE, self.ACC)
+        
+    def GetData(self, address:str) -> List[STATEMENT]:
+        return [
+            *[GetData(var, PLC_NAME, f'{address}.{suffix}') for var, suffix in {
+                self.EN : 'EN',
+                self.TT : 'TT',
+                self.DN : 'DN',
+                self.PRE : 'PRE',
+                self.ACC : 'ACC',
+            }.items()]
+        ]
+        
+    def SetData(self, address:str) -> List[STATEMENT]:
+        return [
+            *[SetData(var, PLC_NAME, f'{address}.{suffix}') for var, suffix in {
+                self.EN : 'EN',
+                self.TT : 'TT',
+                self.DN : 'DN',
+                self.PRE : 'PRE',
+                self.ACC : 'ACC',
+            }.items()]
+        ]
+        
+    def TON(self) -> TON:
+        return TON(self)
+        
 
 def SetData(send_data:Variable, device_name:str, address_name:str, data_count:int = 1) -> CALL:
     return CALL('SetData', send_data, device_name, address_name, data_count)
 
+def SetDataEx(send_data:Variable, device_name:str, address_name:str, data_count:int = 1) -> CALL:
+    return CALL('SetDataEx', send_data, device_name, address_name, data_count)
+
 def GetData(read_data:Variable, device_name:str, address_name:str, data_count:int = 1) -> CALL:
     return CALL('GetData', read_data, device_name, address_name, data_count)
+
+def GetDataEx(read_data:Variable, device_name:str, address_name:str, data_count:int = 1) -> CALL:
+    return CALL('GetDataEx', read_data, device_name, address_name, data_count)
+
+def GetError(error:Variable[int]) -> CALL:
+    return CALL('GetError', error)
 
 def DELAY(delay:Union[Variable[int], int]) -> CALL:
     return CALL('DELAY', delay)
 
 def ASYNC_TRIG_MACRO(macro:str) -> CALL:
     return CALL('ASYNC_TRIG_MACRO', macro)
+
+def MIN(arr:Variable[DT], result:Variable[DT], count:int = 1) -> CALL:
+    return CALL('MIN', arr, result, count)
+
+def MAX(arr:Variable[DT], result:Variable[DT], count:int = 1) -> CALL:
+    return CALL('MAX', arr, result, count)
+
+def C_MIN(a:Union[DT, Variable[DT]], b:Union[DT, Variable[DT]], r:Variable[DT]) -> STATEMENT:
+    if isinstance(a, Variable):
+        return IF(a <= b)(r.set(a)).ELSE()(r.set(b))
+    if isinstance(b, Variable):
+        return IF(b > a)(r.set(a)).ELSE()(r.set(b))
+    if a <= b:
+        return r.set(a)
+    return r.set(b)
+
+def C_MAX(a:Union[DT, Variable[DT]], b:Union[DT, Variable[DT]], r:Variable[DT]) -> STATEMENT:
+    if isinstance(a, Variable):
+        return IF(a > b)(r.set(a)).ELSE()(r.set(b))
+    if isinstance(b, Variable):
+        return IF(b <= a)(r.set(a)).ELSE()(r.set(b))
+    if a > b:
+        return r.set(a)
+    return r.set(b)

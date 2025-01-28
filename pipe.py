@@ -7,7 +7,7 @@ import itertools
 from typing import Callable, Dict, Iterable, Literal, Optional, Set, Tuple, TypeVar, Union, List
 import pyperclip
 from pyvis.network import Network
-from api import AND, NOT, OR, EXPRESSION
+from api import AND, LITERAL, NOT, OR, EXPRESSION
 
 P = None
 
