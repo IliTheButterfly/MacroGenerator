@@ -206,7 +206,7 @@ class Graph:
         # self.net.show_buttons()
         # self.net.set_options(options)
         self.branches:Set[Branch] = self._find_branches()
-        
+    
     def node2shape(self, node:Node) -> str:
         mapping = {
             Point : 'dot',
@@ -641,16 +641,16 @@ def generate_bit_addresses(start:int, count:int):
 
 
 if __name__ == "__main__":
-    g = Graph(PumpMerge)
+    # g = Graph(PumpMerge)
     print()
     print()
     print()
     
-    g.print()
+    # g.print()
 
     # x = g.explore()
     # print(x)
 
-    generate_code(g)
+    # generate_code(g)
     # generate_vars(g)
-    # generate_bit_addresses(170, 46)
+    generate_bit_addresses(173, 12)

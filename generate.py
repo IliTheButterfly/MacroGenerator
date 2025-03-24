@@ -1,3 +1,4 @@
+from base64 import decodebytes, encodebytes
 import itertools
 from time import sleep
 from typing import Dict
@@ -135,7 +136,7 @@ def generate_update_tank_values():
             GetData(maxReq, PLC_NAME, f'{tank}.HLimit'),
             GetData(minReq, PLC_NAME, f'Program:{tank[0:2]}x.{tank}_F0.Over'),
             GetData(req, PLC_NAME, f'{tank}.QtyF.Dem'),
-            maxReq.set(maxReq - total),
+            maxReq.set((maxReq * LITERAL("1.05")) - total),
             SetData(maxReq, HMI_NAME, 'TankReqMax'),
             SetData(minReq, HMI_NAME, 'TankReqMin'),
             IF(maxReq < minReq)(maxReq.set(minReq)),
@@ -224,7 +225,7 @@ def generate_write_tank_values():
                     IF(hmiVal)(
                         SetData(t, PLC_NAME, plc_tag),
                         SetData(f, HMI_NAME, hmi_tag),
-                        RETURN(),
+                        # RETURN(),
                     )
                 )
             
@@ -346,7 +347,7 @@ def generate_update_hopper_values():
             COMMENT('Update Qty Values'),
             GetData(total, PLC_NAME, f'{hopper}.Kg'),
             GetData(maxReq, PLC_NAME, f'{hopper}.HLimit'),
-            maxReq.set(maxReq - total),
+            maxReq.set((maxReq * LITERAL("1.05")) - total),
             IF(maxReq < 0)(maxReq.set(0)),
             SetData(maxReq, HMI_NAME, 'TankReqMax'),
             GetData(minReq, PLC_NAME, f'Program:H4x.{hopper}_F0.Over'),
@@ -533,6 +534,20 @@ valves = [
     
     'MP80101',
     'MP80102',
+    
+    'VP40100',
+    'VP40200',
+    'VP43000',
+    'VP41000',
+    'VP41200',
+    'VP41300',
+    'VP42100',
+    'VP40400',
+    'VP41100',
+    'VP40300',
+    
+    'VP40500',
+    'VP42000',
 ]
 
 valve_read_values = {
@@ -547,6 +562,13 @@ valve_write_values = {
     'ValveWriteAuto' : 'HMI.0',
     'ValveWriteOpen' : 'HMI.3',
     'ValveWriteClose' : 'HMI.4',
+}
+
+valve_other_values = {
+    'EnergizedFB' : 'HMI.14',
+    'EnergizedSim' : 'HMI.13',
+    'Lock' : 'HMI.15',
+    
 }
 
 def load_valve_values():
@@ -1028,6 +1050,14 @@ def test_simple_macro():
     
     return m
 
+def generate_js_valves():
+    s = ''
+    ff = decodebytes(b'AAABIwBSb2Nrd2VsbCBFdGhlck5ldC9JUCAoQ29tcGFjdExvZ2l4KcQLAFZQNDAxMDAuSE1JAAAAAAACAQA=')
+    print(ff)
+    for v in valves:
+        t = b'\x00\x00\x01#\x00Rockwell EtherNet/IP (CompactLogix)\xc4\x0b\x00' + v.encode() + b'.HMI\x00\x00\x00\x00\x00\x02\x01\x00'
+        s += encodebytes(t).decode().replace('\n', '') + '\n'
+    pyperclip.copy(s)
     
 if __name__ == "__main__":
     # Output the scripts
@@ -1055,5 +1085,6 @@ if __name__ == "__main__":
     # generate_sim_tank(0)
     # input()
     # generate_sim_tank(1)
-    
     # test_simple_macro().display()
+    
+    # generate_js_valves()    

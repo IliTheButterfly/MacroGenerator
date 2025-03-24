@@ -362,6 +362,91 @@ class EXPRESSION(Resource):
     def __invert__(self) -> EXPRESSION:
         return NOT(self)
     
+    @overload
+    def __eq__(self, o:Union[int, float, bool, str]) -> LITERAL:
+        return LITERAL(f'{self.name} == {o}')
+    
+    def __eq__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
+        self.resources.append(o)
+        return LITERAL(f'{self.name} == {str(o)}')
+    
+    @overload
+    def __ne__(self, o:Union[int, float, bool, str]) -> LITERAL:
+        return LITERAL(f'{self.name} <> {o}')
+    
+    def __ne__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
+        self.resources.append(o)
+        return LITERAL(f'{self.name} <> {str(o)}')
+    
+    @overload
+    def __lt__(self, o:Union[int, float, bool, str]) -> LITERAL:
+        return LITERAL(f'{self.name} < {o}')
+    
+    def __lt__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
+        self.resources.append(o)
+        return LITERAL(f'{self.name} < {str(o)}')
+
+    @overload
+    def __le__(self, o:Union[int, float, bool, str]) -> LITERAL:
+        return LITERAL(f'{self.name} <= {o}')
+    
+    def __le__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
+        self.resources.append(o)
+        return LITERAL(f'{self.name} <= {str(o)}')
+    
+    @overload
+    def __gt__(self, o:Union[int, float, bool, str]) -> LITERAL:
+        return LITERAL(f'{self.name} > {o}')
+    
+    def __gt__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
+        self.resources.append(o)
+        return LITERAL(f'{self.name} > {str(o)}')
+    
+    @overload
+    def __ge__(self, o:Union[int, float, bool, str]) -> LITERAL:
+        return LITERAL(f'{self.name} >= {o}')
+    
+    def __ge__(self, o:Union[Variable, EXPRESSION]) -> LITERAL:
+        self.resources.append(o)
+        return LITERAL(f'{self.name} >= {str(o)}')
+    
+    def __and__(self, o:Union[EXPRESSION, Variable[bool]]) -> AND:
+        return AND(self, o)
+    
+    def __or__(self, o:Union[EXPRESSION, Variable[bool]]) -> OR:
+        return OR(self, o)
+    
+    def __invert__(self) -> NOT:
+        return NOT(self)
+    
+    def __sub__(self, o) -> LITERAL:
+        res = LITERAL(f'{str(self)} - {str(o)}')
+        res.resources.append(self)
+        if isinstance(o, Resource):
+            res.resources.append(o)
+        return res
+    
+    def __add__(self, o) -> LITERAL:
+        res = LITERAL(f'{str(self)} + {str(o)}')
+        res.resources.append(self)
+        if isinstance(o, Resource):
+            res.resources.append(o)
+        return res
+    
+    def __mul__(self, o) -> LITERAL:
+        res = LITERAL(f'{str(self)} * {str(o)}')
+        res.resources.append(self)
+        if isinstance(o, Resource):
+            res.resources.append(o)
+        return res
+    
+    def __truediv__(self, o) -> LITERAL:
+        res = LITERAL(f'{str(self)} / {str(o)}')
+        res.resources.append(self)
+        if isinstance(o, Resource):
+            res.resources.append(o)
+        return res
+    
     def __str__(self) -> str: ...
     
 class LITERAL(EXPRESSION):
